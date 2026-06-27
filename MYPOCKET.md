@@ -19,7 +19,9 @@
 7. [Transaction Flows](#7-transaction-flows)
 8. [Configuration System](#8-configuration-system)
 9. [Deployment](#9-deployment)
-10. [Development Roadmap](#10-development-roadmap)
+10. [Claude API Cost Estimation](#10-claude-api-cost-estimation)
+11. [Local Development & Testing](#11-local-development--testing)
+12. [Development Roadmap](#12-development-roadmap)
 
 ---
 
@@ -60,12 +62,13 @@ A personal finance tracker for a household of two people with mixed payment meth
 
 Every account is assigned an isolation mode at setup time. This determines how transactions on that account affect budget reports.
 
-| Mode | Description |
-|---|---|
-| `personal` | Tracked in the owner's personal budget |
-| `shared` | Isolated in a separate shared ledger; contributions tracked per person |
-| `investment` | Movements recorded but excluded from expense reports |
-| `transfer_only` | Internal movements only; never counted as income or expense |
+| Mode | Applies to | Description |
+|---|---|---|
+| `personal` | bank, cash, voucher, welfare | Tracked in the owner's personal budget |
+| `shared` | bank | Isolated in a separate shared ledger; contributions tracked per person |
+| `investment` | bank | Movements recorded but excluded from expense reports |
+
+> **Note:** `cash`, `voucher`, and `welfare` accounts are always `personal` — the bot does not ask for isolation mode when setting up these account types.
 
 ### 2.2 Shared accounts and the contribution model
 
@@ -80,14 +83,29 @@ This means the app **does not replace Splitwise**. Splitwise handles debt settle
 
 ### 2.3 Transaction allocation model
 
-A single raw bank transaction can map to multiple logical allocations. Example: one Esselunga receipt of €40 might be €25 household groceries + €15 personal groceries + €16.50 in buoni pasto on the household portion.
+A single raw bank transaction can map to multiple logical allocations. Example: one Esselunga receipt of €40 might be €25 household groceries + €15 personal groceries.
 
 ```
 raw_transaction (€40 on Fineco card)
   └── allocation 1: shared_contribution €25 → Shared account → Groceries
   └── allocation 2: personal €15 → Personal budget → Groceries
-      + voucher_supplement: 2 buoni × €8.50 = €17 attached to allocation 1
 ```
+
+### 2.6-A Mixed payments (card + buoni pasto) — Option A
+
+When an expense is paid partly by card and partly by vouchers, **two separate RawTransactions** are created — one on the bank account for the card portion, one on the voucher account for the voucher portion. Each gets its own TransactionAllocation. This keeps the data model simple: every RawTransaction has exactly one payment source.
+
+```
+Esselunga total €22.50 = €5.50 card (Fineco) + €17.00 vouchers (Edenred)
+
+RawTransaction 1: Fineco, -€5.50, source=manual, status=confirmed
+  └── TransactionAllocation: shared_contribution €5.50, Groceries
+
+RawTransaction 2: Edenred, -€17.00, source=manual, status=confirmed
+  └── TransactionAllocation: shared_contribution €17.00, Groceries
+```
+
+The bot asks "which voucher account?" and "how much?" (or count × face_value if face_value is set on the account). The user sees the split breakdown at save time.
 
 ### 2.4 Cash as an account
 
@@ -115,9 +133,9 @@ Whisper runs locally on the server using the `small` model (≈244MB). This avoi
 
 ### 2.7 Buoni pasto (Edenred) and welfare
 
-Edenred does not expose a PSD2 API. Vouchers are tracked as a manual prepaid balance. When a bank transaction is detected at an eligible merchant (supermarket, restaurant), the bot asks whether buoni pasto were also used. The voucher portion is logged as a separate payment leg on the same allocation.
+Edenred does not expose a PSD2 API. Vouchers and welfare credits are simply **manual accounts** — payment sources like any other account, with no balance tracking or batch loading. When an expense is logged, the bot asks whether vouchers were also used and creates a second RawTransaction on the voucher account (see §2.6-A).
 
-Welfare platform credits (e.g. Edenred Welfare, Day Welfare) are also manual — logged when redeemed.
+The `face_value` field on the Account model enables shorthand entry: typing `2` when face_value=€8.00 is stored is interpreted as 2 × €8.00 = €16.00. This is set during account setup for voucher/welfare account types.
 
 ---
 
@@ -249,22 +267,6 @@ class TransactionAllocation(Base):
     reconciled_by: int (FK → users.id)
     reconciled_at: datetime
     notes: str | None
-
-    # voucher supplement (if buoni pasto were also used on this allocation)
-    vouchers_used: int | None
-    voucher_value: float | None        # total face value of vouchers
-    voucher_batch_id: int | None (FK → voucher_batches.id)
-
-# voucher_batches (monthly employer top-up)
-class VoucherBatch(Base):
-    __tablename__ = "voucher_batches"
-    id: int (PK)
-    account_id: int (FK → accounts.id)
-    loaded_at: date
-    quantity: int
-    face_value: float                  # per voucher, e.g. 8.50
-    provider: str                      # Edenred | Ticket Restaurant | etc.
-    expiry_date: date | None
 
 # account_contributions (summary of who funded a shared account)
 class AccountContribution(Base):
@@ -721,20 +723,25 @@ async def poll_all_accounts():
 
 ### 7.3 Mixed payment (card + buoni pasto)
 
+Two separate RawTransactions are created — one per payment source (see §2.6-A).
+
 ```
-1. Bank API detects: ESSELUNGA €5.50 on Fineco
-2. Bot: "Esselunga €5.50 — personal or household?"
-3. User: "Household"
-4. Bot: "Were buoni pasto also used?"
-5. User: "Yes, 2 buoni" (face value €8.50 each = €17.00)
-6. Bot: "Total household spend: €22.50 (€5.50 card + €17.00 vouchers). Category?"
-7. User: "Groceries"
-8. Result:
-   - RawTransaction: Fineco, -€5.50, confirmed
-   - TransactionAllocation: shared_contribution, €22.50, Groceries
-     └── vouchers_used: 2, voucher_value: 17.00
-   - VoucherBatch balance: reduced by 2
-   - AccountContribution: from=you, to=shared, €22.50
+1. User types: "esselunga 22.50"
+2. Claude parses: merchant=Esselunga, amount=22.50, category=Groceries
+3. Bot: "Esselunga €22.50 — personal or household?"
+4. User: "Household"
+5. Bot: "Also paid with vouchers or welfare?" [Edenred Buoni Pasto] [No, just card]
+6. User: "Edenred Buoni Pasto"
+7. Bot: "How much from Buoni Pasto? (or type count, e.g. 2 for 2 × €8.00)"
+8. User: "2"  → bot interprets as 2 × €8.00 = €16.00
+9. Result:
+   - RawTransaction 1: Fineco, -€6.50, source=manual, confirmed
+     └── TransactionAllocation: shared_contribution €6.50, Groceries
+         └── AccountContribution: from=you, to=shared, €6.50
+   - RawTransaction 2: Buoni Pasto, -€16.00, source=manual, confirmed
+     └── TransactionAllocation: shared_contribution €16.00, Groceries
+         └── AccountContribution: from=you, to=shared, €16.00
+   - Bot confirms: "✅ Esselunga €6.50 card + €16.00 Buoni Pasto = €22.50 total → Groceries (household)"
 ```
 
 ### 7.4 Split receipt (personal + shared in one transaction)
@@ -779,11 +786,22 @@ All account configuration is manageable from Telegram. The wizard runs on `/star
   → "Welcome! Let's set up your accounts."
   → "What's your first account?" [user types name]
   → "What type?" [Bank] [Cash] [Buoni pasto] [Welfare]
-  → "How should I treat it?" [Personal] [Shared/family] [Investment]
-  → "Is it connected to a bank?" [Yes, connect now] [No, manual]
-  → (if yes) → sends Nordigen auth link
+
+  If Bank:
+    → "How is this account used?" [Personal] [Shared/Family] [Investment]
+    → Summary → [Create account] [Start over]
+
+  If Cash:
+    → (isolation always Personal, no question asked)
+    → Summary → [Create account] [Start over]
+
+  If Buoni pasto / Welfare:
+    → (isolation always Personal, no question asked)
+    → "What's the face value per voucher?" [user types amount or Skip]
+    → Summary → [Create account] [Start over]
+
   → "Add another account?" [Yes] [No, done]
-  → "All set! You can manage settings at any time with /settings."
+  → "All done! Send me an expense to get started."
 ```
 
 ### 8.2 Sharing a shared account
@@ -1040,21 +1058,422 @@ Running Whisper `small` locally means zero per-request cost for audio transcript
 
 ---
 
-## 11. Development Roadmap
+## 11. Local Development & Testing
+
+### 11.1 Philosophy — no Docker locally
+
+Run everything as plain Python processes during development. Docker is only for deployment. This keeps the local loop fast — no container rebuild on every code change.
+
+| | Local dev | Production |
+|---|---|---|
+| Database | SQLite (file) | PostgreSQL |
+| Bot | Plain Python script | Docker container |
+| Web UI | uvicorn --reload | Docker container |
+| Whisper | Loads once in memory | Docker container |
+| Config | .env | .env.production |
+
+### 11.2 Environment files
+
+Keep three env files — never commit any of them:
+
+```bash
+.env                  # local dev — SQLite, debug logging, real API keys
+.env.production       # server — PostgreSQL, INFO logging
+.env.test             # CI/testing — SQLite in-memory, mock keys
+```
+
+**.env (local dev):**
+```bash
+ENVIRONMENT=development
+DATABASE_URL=sqlite+aiosqlite:///./mypocket.db
+TELEGRAM_BOT_TOKEN=your_real_token
+ANTHROPIC_API_KEY=your_real_key
+WHISPER_MODEL=small
+LOG_LEVEL=DEBUG
+BASE_URL=http://localhost:8000
+POLL_INTERVAL_HOURS=4
+INVITE_KEY_EXPIRY_HOURS=24
+SECRET_KEY=any-local-secret
+```
+
+**.env.test:**
+```bash
+ENVIRONMENT=test
+DATABASE_URL=sqlite+aiosqlite:///:memory:
+TELEGRAM_BOT_TOKEN=fake-token
+ANTHROPIC_API_KEY=fake-key
+WHISPER_MODEL=tiny
+LOG_LEVEL=WARNING
+BASE_URL=http://localhost:8000
+SECRET_KEY=test-secret
+```
+
+**.env.production:**
+```bash
+ENVIRONMENT=production
+DATABASE_URL=postgresql+asyncpg://mypocket:${DB_PASSWORD}@db/mypocket
+TELEGRAM_BOT_TOKEN=your_real_token
+ANTHROPIC_API_KEY=your_real_key
+WHISPER_MODEL=small
+LOG_LEVEL=INFO
+BASE_URL=https://yourdomain.com
+POLL_INTERVAL_HOURS=4
+INVITE_KEY_EXPIRY_HOURS=24
+SECRET_KEY=strong-random-secret
+```
+
+### 11.3 Config system
+
+```python
+# app/config.py
+from pydantic_settings import BaseSettings
+from functools import lru_cache
+
+class Settings(BaseSettings):
+    environment: str = "development"
+    database_url: str = "sqlite+aiosqlite:///./mypocket.db"
+    telegram_bot_token: str
+    anthropic_api_key: str
+    whisper_model: str = "small"
+    log_level: str = "INFO"
+    base_url: str = "http://localhost:8000"
+    poll_interval_hours: int = 4
+    invite_key_expiry_hours: int = 24
+    secret_key: str
+
+    @property
+    def is_development(self) -> bool:
+        return self.environment == "development"
+
+    @property
+    def is_testing(self) -> bool:
+        return self.environment == "test"
+
+    class Config:
+        env_file = ".env"
+
+@lru_cache
+def get_settings() -> Settings:
+    return Settings()
+
+settings = get_settings()
+```
+
+### 11.4 Testing layers
+
+Three levels, each with a clear purpose:
+
+**Unit tests** — pure logic, no database, no external APIs. Run in milliseconds. Cover: allocation splitting, voucher balance calculation, budget envelope math, report aggregation, transfer detection heuristics.
+
+**Integration tests** — real database operations against an in-memory SQLite instance. Cover: CRUD operations, ORM relationships, Alembic migration correctness, Nordigen response mapping.
+
+**Bot tests** — full Telegram handler flows with mocked Telegram client and mocked Claude API. Cover: expense logging conversation, reconciliation flow, voice confirm step, receipt photo parsing.
+
+### 11.5 Test folder structure
+
+```
+tests/
+├── conftest.py               ← shared fixtures
+├── unit/
+│   ├── test_allocations.py   ← receipt splitting logic
+│   ├── test_vouchers.py      ← buoni pasto balance math
+│   ├── test_budget.py        ← envelope calculations
+│   ├── test_report.py        ← monthly aggregation
+│   └── test_transfer.py      ← transfer detection heuristic
+├── integration/
+│   ├── test_crud_accounts.py
+│   ├── test_crud_transactions.py
+│   ├── test_crud_allocations.py
+│   └── test_nordigen_mapper.py
+└── bot/
+    ├── test_expense_handler.py
+    ├── test_reconcile_handler.py
+    ├── test_voice_handler.py
+    └── test_photo_handler.py
+```
+
+### 11.6 conftest.py
+
+```python
+# tests/conftest.py
+import pytest
+import pytest_asyncio
+from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
+from sqlalchemy.orm import sessionmaker
+from unittest.mock import AsyncMock, MagicMock
+from app.models import Base
+from app.config import Settings
+
+# Override settings for tests
+@pytest.fixture(autouse=True)
+def test_settings(monkeypatch):
+    monkeypatch.setenv("ENVIRONMENT", "test")
+    monkeypatch.setenv("DATABASE_URL", "sqlite+aiosqlite:///:memory:")
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "fake-token")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "fake-key")
+    monkeypatch.setenv("SECRET_KEY", "test-secret")
+
+# Fresh in-memory DB for every test
+@pytest_asyncio.fixture
+async def db_session():
+    engine = create_async_engine(
+        "sqlite+aiosqlite:///:memory:",
+        connect_args={"check_same_thread": False}
+    )
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    async_session = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    async with async_session() as session:
+        yield session
+    await engine.dispose()
+
+# Mock Claude API — returns a canned expense parse response
+@pytest.fixture
+def mock_claude():
+    mock = AsyncMock()
+    mock.messages.create.return_value.content = [MagicMock(
+        type="text",
+        text='{"amount": 22.50, "merchant": "Esselunga", "category_suggestion": "Groceries", '
+             '"category_confidence": 0.95, "likely_shared": true, "vouchers_detected": false, '
+             '"clarification_needed": null}'
+    )]
+    return mock
+
+# Mock Whisper transcriber
+@pytest.fixture
+def mock_whisper():
+    mock = AsyncMock(return_value="pagato 22 euro esselunga")
+    return mock
+
+# Mock Telegram Update object
+@pytest.fixture
+def mock_update():
+    update = MagicMock()
+    update.message.from_user.id = 123456789
+    update.message.from_user.username = "testuser"
+    update.message.reply_text = AsyncMock()
+    update.message.text = None
+    update.message.voice = None
+    update.message.photo = None
+    return update
+
+# Mock Telegram Context
+@pytest.fixture
+def mock_context():
+    context = MagicMock()
+    context.bot.get_file = AsyncMock()
+    return context
+
+# Factory: create a test user in the DB
+@pytest_asyncio.fixture
+async def test_user(db_session):
+    from app.models.user import User
+    user = User(telegram_id="123456789", name="Test User")
+    db_session.add(user)
+    await db_session.commit()
+    await db_session.refresh(user)
+    return user
+
+# Factory: create a test personal account
+@pytest_asyncio.fixture
+async def test_account(db_session, test_user):
+    from app.models.account import Account
+    account = Account(
+        name="Fineco Personale",
+        account_type="bank",
+        isolation_mode="personal",
+        created_by=test_user.id
+    )
+    db_session.add(account)
+    await db_session.commit()
+    await db_session.refresh(account)
+    return account
+```
+
+### 11.7 Example unit test
+
+```python
+# tests/unit/test_allocations.py
+import pytest
+from app.services.reconciliation import split_transaction
+
+def test_split_receipt_personal_and_shared():
+    result = split_transaction(
+        total=40.00,
+        shared_amount=25.00,
+        vouchers_used=2,
+        voucher_face_value=8.50
+    )
+    assert result.shared_allocation == pytest.approx(42.00)  # 25 + 17 vouchers
+    assert result.personal_allocation == pytest.approx(15.00)
+    assert result.card_amount == pytest.approx(23.00)        # 40 - 17 voucher value
+
+def test_voucher_only_payment():
+    result = split_transaction(
+        total=0.00,   # nothing on card
+        shared_amount=8.50,
+        vouchers_used=1,
+        voucher_face_value=8.50
+    )
+    assert result.shared_allocation == pytest.approx(8.50)
+    assert result.card_amount == pytest.approx(0.00)
+
+def test_split_exceeds_total_raises():
+    with pytest.raises(ValueError, match="shared amount exceeds total"):
+        split_transaction(total=10.00, shared_amount=15.00)
+```
+
+### 11.8 Example integration test
+
+```python
+# tests/integration/test_crud_transactions.py
+import pytest
+from app.crud.transactions import create_pending_transaction, get_pending_transactions
+
+@pytest.mark.asyncio
+async def test_create_and_fetch_pending(db_session, test_account):
+    tx = await create_pending_transaction(
+        db=db_session,
+        account_id=test_account.id,
+        amount=-22.50,
+        merchant="Esselunga",
+        bank_ref="BANK-001"
+    )
+    assert tx.status == "pending"
+    assert tx.merchant == "Esselunga"
+
+    pending = await get_pending_transactions(db=db_session, account_id=test_account.id)
+    assert len(pending) == 1
+    assert pending[0].bank_ref == "BANK-001"
+
+@pytest.mark.asyncio
+async def test_no_duplicate_bank_ref(db_session, test_account):
+    await create_pending_transaction(
+        db=db_session, account_id=test_account.id,
+        amount=-22.50, merchant="Esselunga", bank_ref="BANK-001"
+    )
+    # Second call with same bank_ref should return existing, not create new
+    result = await create_pending_transaction(
+        db=db_session, account_id=test_account.id,
+        amount=-22.50, merchant="Esselunga", bank_ref="BANK-001"
+    )
+    pending = await get_pending_transactions(db=db_session, account_id=test_account.id)
+    assert len(pending) == 1  # still only one
+```
+
+### 11.9 requirements-dev.txt
+
+```
+pytest>=8.0
+pytest-asyncio>=0.23
+pytest-cov
+httpx                 # testing FastAPI endpoints with TestClient
+respx                 # mock httpx calls (Nordigen API)
+factory-boy           # test data factories
+freezegun             # freeze time for date-sensitive tests
+```
+
+### 11.10 Makefile
+
+```makefile
+.PHONY: test test-unit test-integration test-bot test-cov run-bot run-web migrate reset-db lint
+
+# Testing
+test:
+	pytest tests/ -v
+
+test-unit:
+	pytest tests/unit/ -v
+
+test-integration:
+	pytest tests/integration/ -v
+
+test-bot:
+	pytest tests/bot/ -v
+
+test-cov:
+	pytest --cov=app --cov-report=html --cov-report=term-missing
+	@echo "Coverage report: open htmlcov/index.html"
+
+# Running locally
+run-bot:
+	python -m app.bot.main
+
+run-web:
+	uvicorn app.main:app --reload --port 8000
+
+run-all:
+	make run-web & make run-bot
+
+# Database
+migrate:
+	alembic upgrade head
+
+migrate-create:
+	alembic revision --autogenerate -m "$(msg)"
+
+reset-db:
+	rm -f mypocket.db
+	alembic upgrade head
+	python scripts/seed_categories.py
+	@echo "Database reset and seeded."
+
+# Code quality
+lint:
+	ruff check app/ tests/
+	mypy app/
+
+format:
+	ruff format app/ tests/
+
+# Docker (local testing with containers)
+docker-build:
+	docker compose build
+
+docker-up:
+	docker compose up
+
+docker-down:
+	docker compose down
+```
+
+### 11.11 Local → production promotion path
+
+```
+1. Write code + tests locally (SQLite, plain Python)
+      ↓
+2. All tests pass: make test
+      ↓
+3. Manual smoke test: make run-bot + make run-web
+      ↓
+4. Build and test in Docker locally:
+   docker compose build && docker compose up
+      ↓
+5. Push to server (git push / rsync)
+      ↓
+6. On server:
+   docker compose -f docker-compose.prod.yml pull
+   docker compose -f docker-compose.prod.yml up -d
+   docker compose -f docker-compose.prod.yml exec app alembic upgrade head
+```
+
+The only differences between step 4 and step 6 are the compose file and the `DATABASE_URL` env variable. Everything else is identical — what works in Docker locally will work on the server.
+
+---
+
+## 12. Development Roadmap
 
 ### v1 — Core (start here)
 
-- [ ] Database models + Alembic migrations
-- [ ] Seed default categories
-- [ ] Telegram bot: `/start` setup wizard (manual accounts only)
-- [ ] Telegram bot: unified message router (text / voice / photo)
-- [ ] Whisper local model integration (transcriber.py)
-- [ ] Telegram bot: manual expense logging with AI parsing (text)
-- [ ] Telegram bot: voice expense logging with transcription confirm step
-- [ ] Telegram bot: receipt photo parsing via Claude vision
-- [ ] Telegram bot: buoni pasto batch logging and balance tracking
-- [ ] Telegram bot: cash expense logging
-- [ ] Telegram bot: `/report` — monthly summary (text-based)
+- [x] Database models + Alembic migrations (single clean migration, no VoucherBatch)
+- [x] Seed default categories (27 system categories, 12 top-level + 15 children)
+- [x] Telegram bot: `/start` setup wizard — bank (personal/shared/investment), cash, voucher/welfare (face_value)
+- [x] Telegram bot: `/settings` command — account list + Add account button
+- [x] Telegram bot: manual expense logging with AI parsing (Claude Haiku, text)
+- [x] Telegram bot: mixed card + voucher payment flow (two RawTransactions, Option A)
+- [ ] Telegram bot: receipt photo parsing via Claude Sonnet vision
+- [ ] Telegram bot: voice expense logging with Whisper transcription + confirm step
+- [ ] Telegram bot: `/report` — monthly summary (text-based, by category)
 - [ ] Basic Web UI: dashboard + transaction list
 
 ### v2 — Bank integration
@@ -1064,6 +1483,7 @@ Running Whisper `small` locally means zero per-request cost for audio transcript
 - [ ] Pending transaction reconciliation flow in bot
 - [ ] Transfer detection heuristic
 - [ ] Nordigen re-auth reminder (80-day warning)
+- [ ] AI category suggestions enriched with user history — query last 3 months of confirmed allocations and inject top merchant→category pairs into the Claude prompt context; no model training needed, just prompt augmentation (requires enough data, so implement after Nordigen bulk import)
 
 ### v3 — Shared accounts + multi-user
 
@@ -1080,7 +1500,7 @@ Running Whisper `small` locally means zero per-request cost for audio transcript
 - [ ] Shared account report page
 - [ ] Buoni pasto history and projection ("N vouchers left, covers ~X days")
 - [ ] Cash reconciliation prompt (auto-triggered after 10+ days)
-- [ ] Year-over-year comparisonB
+- [ ] Year-over-year comparison
 
 ### v5 — Polish
 
@@ -1092,5 +1512,5 @@ Running Whisper `small` locally means zero per-request cost for audio transcript
 
 ---
 
-*Document version: 1.2 — updated June 2026 (renamed to MYPOCKET, added multimodal input, Whisper integration, Claude API cost estimation)*
-*Next step: open in VS Code or Claude Code, run `pip install -r requirements.txt`, initialize Alembic, and start with v1 models.*
+*Document version: 1.4 — updated June 2026*
+*Changes in 1.4: VoucherBatch removed (vouchers are plain accounts); mixed payments use two separate RawTransactions (Option A); TransactionAllocation has no voucher columns; isolation mode options simplified (bank: personal/shared/investment; cash/voucher/welfare: always personal); face_value set during wizard for voucher/welfare; v1 roadmap updated with completion status.*

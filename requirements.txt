@@ -1,0 +1,16 @@
+fastapi>=0.111
+uvicorn[standard]>=0.29
+sqlalchemy[asyncio]>=2.0
+aiosqlite
+asyncpg
+alembic
+pydantic-settings
+python-telegram-bot>=20.0
+anthropic>=0.25
+httpx
+apscheduler
+jinja2
+python-multipart
+python-dotenv
+openai-whisper>=20231117
+ffmpeg-python
