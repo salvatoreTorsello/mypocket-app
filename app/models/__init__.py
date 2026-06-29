@@ -9,3 +9,4 @@ from app.models.transaction import RawTransaction, TransactionAllocation  # noqa
 from app.models.contribution import AccountContribution  # noqa: F401
 from app.models.budget import Budget  # noqa: F401
 from app.models.cash_adjustment import CashAdjustment  # noqa: F401
+from app.models.bank_consent import BankConsent  # noqa: F401

@@ -14,6 +14,8 @@ class Settings(BaseSettings):
     invite_key_expiry_hours: int = 24
     secret_key: str = "change-me"
     web_password: str = "change-me"
+    enable_banking_app_id: str = ""
+    enable_banking_key_file: str = ""  # path to RSA private key .pem
 
     @property
     def is_development(self) -> bool:

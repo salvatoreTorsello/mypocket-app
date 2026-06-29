@@ -8,10 +8,12 @@ pydantic-settings
 python-telegram-bot>=20.0
 anthropic>=0.25
 httpx
-apscheduler
+apscheduler>=3.10
 jinja2
 python-multipart
 python-dotenv
 itsdangerous
+PyJWT>=2.8
+cryptography>=42
 openai-whisper>=20231117
 ffmpeg-python

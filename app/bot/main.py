@@ -3,7 +3,9 @@ import logging
 from telegram import Update
 from telegram.ext import Application, CallbackQueryHandler, CommandHandler, ContextTypes, MessageHandler, filters
 
+from app.bot.handlers.bank_link import bank_link_conv
 from app.bot.handlers.expense import expense_conv
+from app.bot.handlers.reconcile import reconcile_conv
 from app.bot.handlers.report import report_cmd, report_nav
 from app.bot.handlers.setup import setup_conv
 from app.bot.keyboards import settings_keyboard
@@ -50,6 +52,17 @@ async def settings_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     )
 
 
+async def sync_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await update.message.reply_text("Syncing bank transactions… ⏳")
+    try:
+        from app.integrations.nordigen.poller import sync_all
+        await sync_all()
+        await update.message.reply_text("Sync done. Use /pending to review new transactions.")
+    except Exception as exc:
+        logger.error("Manual sync failed: %s", exc)
+        await update.message.reply_text(f"Sync failed: {exc}")
+
+
 async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(
         "*MyPocket — commands:*\n\n"
@@ -57,6 +70,9 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "/start — set up or view your accounts\n"
         "/report — monthly expense summary\n"
         "/settings — manage accounts\n"
+        "/link\\_bank — connect a bank account\n"
+        "/pending — review imported bank transactions\n"
+        "/sync — manually trigger bank sync\n"
         "/help — this message\n"
         "/cancel — cancel current action",
         parse_mode="Markdown",
@@ -82,13 +98,16 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> N
 def create_application() -> Application:
     app = Application.builder().token(settings.telegram_bot_token).build()
 
-    # ConversationHandlers (order matters: setup takes priority over expense)
+    # ConversationHandlers (order matters: setup first, then bank link/reconcile, then expense)
     app.add_handler(setup_conv)
+    app.add_handler(bank_link_conv)
+    app.add_handler(reconcile_conv)
     app.add_handler(expense_conv)
 
     # Simple commands
     app.add_handler(CommandHandler("settings", settings_cmd))
     app.add_handler(CommandHandler("report",   report_cmd))
+    app.add_handler(CommandHandler("sync",     sync_cmd))
     app.add_handler(CommandHandler("help",     help_cmd))
 
     # Report month navigation

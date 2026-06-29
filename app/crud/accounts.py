@@ -14,15 +14,18 @@ async def create(
     currency: str = "EUR",
     iban: str | None = None,
     face_value: float | None = None,
+    nordigen_account_id: str | None = None,
+    user_id: int | None = None,  # alias for created_by
 ) -> Account:
     account = Account(
         name=name,
         account_type=account_type,
         isolation_mode=isolation_mode,
-        created_by=created_by,
+        created_by=user_id or created_by,
         currency=currency,
         iban=iban,
         face_value=face_value,
+        nordigen_account_id=nordigen_account_id,
     )
     db.add(account)
     await db.flush()
@@ -55,3 +58,7 @@ async def get_shared_accounts(db: AsyncSession, user_id: int) -> list[Account]:
 
 async def get_by_id(db: AsyncSession, account_id: int) -> Account | None:
     return await db.get(Account, account_id)
+
+
+# alias used by the Nordigen poller
+get = get_by_id

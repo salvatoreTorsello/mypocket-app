@@ -1478,9 +1478,9 @@ The only differences between step 4 and step 6 are the compose file and the `DAT
 
 ### v2 — Bank integration
 
-- [ ] Nordigen client + OAuth consent flow
-- [ ] Polling job (APScheduler)
-- [ ] Pending transaction reconciliation flow in bot
+- [x] Nordigen client + OAuth consent flow (`/link_bank` bot command)
+- [x] Polling job (APScheduler in FastAPI lifespan, every N hours)
+- [x] Pending transaction reconciliation flow in bot (`/pending` command)
 - [ ] Transfer detection heuristic
 - [ ] Nordigen re-auth reminder (80-day warning)
 - [ ] AI category suggestions enriched with user history — query last 3 months of confirmed allocations and inject top merchant→category pairs into the Claude prompt context; no model training needed, just prompt augmentation (requires enough data, so implement after Nordigen bulk import)
