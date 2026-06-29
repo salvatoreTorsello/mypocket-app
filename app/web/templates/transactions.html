@@ -1,0 +1,52 @@
+{% extends "base.html" %}
+{% block title %}Transactions — MyPocket{% endblock %}
+{% block content %}
+<div class="container">
+  <div class="card">
+    <h2>All transactions</h2>
+    {% if rows %}
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Date</th>
+            <th>Merchant</th>
+            <th>Category</th>
+            <th>Type</th>
+            <th>Account</th>
+            <th style="text-align:right">Amount</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for tx in rows %}
+          <tr>
+            <td>{{ tx.tx_date.strftime("%d %b %Y") }}</td>
+            <td>{{ tx.merchant or "—" }}</td>
+            <td>
+              {% if tx.category_icon %}{{ tx.category_icon }} {% endif %}
+              {{ tx.category_name }}
+            </td>
+            <td>
+              {% if tx.allocation_type == "shared_contribution" %}
+              <span class="badge shared">household</span>
+              {% else %}
+              <span class="badge">personal</span>
+              {% endif %}
+            </td>
+            <td>{{ tx.account_name }}</td>
+            <td class="amount-cell" style="text-align:right">€{{ "%.2f"|format(tx.amount) }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    <div class="pagination">
+      {% if has_prev %}<a href="/transactions?page={{ page - 1 }}">← Previous</a>{% endif %}
+      {% if has_next %}<a href="/transactions?page={{ page + 1 }}">Next →</a>{% endif %}
+    </div>
+    {% else %}
+    <p style="color:#6e6e73;">No transactions yet.</p>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}

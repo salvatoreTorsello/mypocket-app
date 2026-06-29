@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}MyPocket{% endblock %}</title>
+  <link rel="stylesheet" href="/static/css/main.css">
+</head>
+<body>
+<nav>
+  <span class="brand">💰 MyPocket</span>
+  <a href="/" {% if request.url.path == "/" %}class="active"{% endif %}>Dashboard</a>
+  <a href="/transactions" {% if request.url.path == "/transactions" %}class="active"{% endif %}>Transactions</a>
+  <a href="/logout">Log out</a>
+</nav>
+{% block content %}{% endblock %}
+</body>
+</html>

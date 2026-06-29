@@ -1,9 +1,10 @@
 import logging
 
 from telegram import Update
-from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
+from telegram.ext import Application, CallbackQueryHandler, CommandHandler, ContextTypes, MessageHandler, filters
 
 from app.bot.handlers.expense import expense_conv
+from app.bot.handlers.report import report_cmd, report_nav
 from app.bot.handlers.setup import setup_conv
 from app.bot.keyboards import settings_keyboard
 from app.crud import accounts as crud_accounts
@@ -54,6 +55,7 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "*MyPocket — commands:*\n\n"
         "Just send me an expense, e.g. *esselunga 22.50*\n\n"
         "/start — set up or view your accounts\n"
+        "/report — monthly expense summary\n"
         "/settings — manage accounts\n"
         "/help — this message\n"
         "/cancel — cancel current action",
@@ -86,7 +88,11 @@ def create_application() -> Application:
 
     # Simple commands
     app.add_handler(CommandHandler("settings", settings_cmd))
-    app.add_handler(CommandHandler("help", help_cmd))
+    app.add_handler(CommandHandler("report",   report_cmd))
+    app.add_handler(CommandHandler("help",     help_cmd))
+
+    # Report month navigation
+    app.add_handler(CallbackQueryHandler(report_nav, pattern="^report:"))
 
     # Catch unknown commands (must be last)
     app.add_handler(MessageHandler(filters.COMMAND, unknown_command))

@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Login — MyPocket</title>
+  <link rel="stylesheet" href="/static/css/main.css">
+</head>
+<body>
+<div class="login-wrap">
+  <div class="login-box">
+    <h1>💰 MyPocket</h1>
+    <p>Personal expense tracker</p>
+    <form method="post" action="/login">
+      <input type="password" name="password" placeholder="Password" autofocus>
+      <button type="submit">Sign in</button>
+      {% if error %}<p class="error">{{ error }}</p>{% endif %}
+    </form>
+  </div>
+</div>
+</body>
+</html>

@@ -25,19 +25,25 @@ Voucher signals (vouchers_detected=true): buoni, buono pasto, ticket, edenred, w
 likely_shared=true examples: groceries, utilities, rent, household goods; false examples: personal clothing, personal health, individual entertainment
 """
 
-RECEIPT_EXTRACT_SYSTEM = """You are analysing an Italian receipt (scontrino fiscale).
+RECEIPT_EXTRACT_SYSTEM = f"""You are analysing an Italian receipt (scontrino fiscale).
 Respond ONLY with a JSON object — no explanation, no markdown fence:
-{
+{{
   "merchant": <str>,
   "date": <"YYYY-MM-DD" or null>,
   "total": <positive float>,
-  "items": [{"name": <str>, "amount": <float>}],
+  "items": [{{"name": <str>, "amount": <float>}}],
   "payment_method": <"card" | "cash" | "mixed" | "unknown">,
+  "category_suggestion": <str from the list below>,
+  "category_confidence": <float 0.0–1.0>,
   "confidence": <float 0.0–1.0>
-}
+}}
 
 Rules:
 - items: at most 5 items, ordered by descending amount
 - confidence: how clearly the receipt is readable (0 = not a receipt / unreadable, 1 = perfect)
 - If this is not a receipt, set confidence=0.0 and merchant="unknown"
+
+Known categories: {CATEGORY_LIST}
+Italian merchant recognition (→ Groceries): Esselunga, Coop, CONAD, Lidl, Carrefour, Pam, Iper, Auchan, Simply, Eurospin
+Bar/café receipts → Restaurants; farmacia → Health; benzina/carburante → Transport
 """

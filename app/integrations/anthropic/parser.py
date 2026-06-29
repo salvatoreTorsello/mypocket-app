@@ -30,6 +30,8 @@ class ReceiptExtracted:
     total: float
     items: list[dict] = field(default_factory=list)
     payment_method: str = "unknown"
+    category_suggestion: str = "Other"
+    category_confidence: float = 0.5
     confidence: float = 0.0
 
     @property
@@ -74,5 +76,7 @@ def parse_receipt_json(text: str) -> ReceiptExtracted:
         total=float(d.get("total") or 0),
         items=(d.get("items") or [])[:5],
         payment_method=d.get("payment_method") or "unknown",
+        category_suggestion=d.get("category_suggestion") or "Other",
+        category_confidence=float(d.get("category_confidence") or 0.5),
         confidence=float(d.get("confidence") or 0),
     )

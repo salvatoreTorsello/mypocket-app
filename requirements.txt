@@ -12,5 +12,6 @@ apscheduler
 jinja2
 python-multipart
 python-dotenv
+itsdangerous
 openai-whisper>=20231117
 ffmpeg-python

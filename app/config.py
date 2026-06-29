@@ -13,6 +13,7 @@ class Settings(BaseSettings):
     poll_interval_hours: int = 4
     invite_key_expiry_hours: int = 24
     secret_key: str = "change-me"
+    web_password: str = "change-me"
 
     @property
     def is_development(self) -> bool:

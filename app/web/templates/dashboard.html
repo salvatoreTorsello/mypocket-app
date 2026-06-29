@@ -1,0 +1,92 @@
+{% extends "base.html" %}
+{% block title %}Dashboard — MyPocket{% endblock %}
+{% block content %}
+<div class="container">
+
+  {% if no_user %}
+  <div class="card">
+    <p>No users found. Open Telegram and send <strong>/start</strong> to the bot first.</p>
+  </div>
+  {% else %}
+
+  <div class="stats">
+    <div class="stat">
+      <div class="label">Personal — {{ month_name }}</div>
+      <div class="value personal">€{{ "%.2f"|format(personal_total) }}</div>
+    </div>
+    <div class="stat">
+      <div class="label">Household contributions</div>
+      <div class="value shared">€{{ "%.2f"|format(shared_total) }}</div>
+    </div>
+    <div class="stat">
+      <div class="label">Grand total</div>
+      <div class="value grand">€{{ "%.2f"|format(grand_total) }}</div>
+    </div>
+  </div>
+
+  <div style="display:flex; gap:24px; flex-wrap:wrap; align-items:flex-start;">
+
+    <div class="card" style="flex:1; min-width:260px;">
+      <h2>{{ month_name }} by category</h2>
+      {% if categories %}
+      <ul class="cat-list">
+        {% for cat_name, cat_icon, amount in categories %}
+        <li>
+          <span class="icon">{{ cat_icon or "📌" }}</span>
+          <span class="name">{{ cat_name }}</span>
+          <span class="amount">€{{ "%.2f"|format(amount) }}</span>
+        </li>
+        {% endfor %}
+      </ul>
+      {% else %}
+      <p style="color:#6e6e73; font-size:14px;">No personal expenses this month.</p>
+      {% endif %}
+    </div>
+
+    <div class="card" style="flex:2; min-width:320px;">
+      <h2>Recent transactions</h2>
+      {% if recent %}
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Date</th>
+              <th>Merchant</th>
+              <th>Category</th>
+              <th>Account</th>
+              <th style="text-align:right">Amount</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for tx in recent %}
+            <tr>
+              <td>{{ tx.tx_date.strftime("%d %b") }}</td>
+              <td>{{ tx.merchant or "—" }}</td>
+              <td>
+                {% if tx.category_icon %}{{ tx.category_icon }} {% endif %}
+                {{ tx.category_name }}
+              </td>
+              <td>{{ tx.account_name }}</td>
+              <td class="amount-cell" style="text-align:right">
+                {% if tx.allocation_type == "shared_contribution" %}
+                <span class="badge shared">+shared</span>
+                {% endif %}
+                €{{ "%.2f"|format(tx.amount) }}
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      <p style="margin-top:12px; font-size:13px; color:#6e6e73;">
+        <a href="/transactions">View all →</a>
+      </p>
+      {% else %}
+      <p style="color:#6e6e73; font-size:14px;">No transactions yet. Log one via the Telegram bot.</p>
+      {% endif %}
+    </div>
+
+  </div>
+  {% endif %}
+</div>
+{% endblock %}

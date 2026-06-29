@@ -1471,10 +1471,10 @@ The only differences between step 4 and step 6 are the compose file and the `DAT
 - [x] Telegram bot: `/settings` command — account list + Add account button
 - [x] Telegram bot: manual expense logging with AI parsing (Claude Haiku, text)
 - [x] Telegram bot: mixed card + voucher payment flow (two RawTransactions, Option A)
-- [ ] Telegram bot: receipt photo parsing via Claude Sonnet vision
-- [ ] Telegram bot: voice expense logging with Whisper transcription + confirm step
-- [ ] Telegram bot: `/report` — monthly summary (text-based, by category)
-- [ ] Basic Web UI: dashboard + transaction list
+- [x] Telegram bot: receipt photo parsing via Claude Sonnet vision
+- [x] Telegram bot: voice expense logging with Whisper transcription + confirm step
+- [x] Telegram bot: `/report` — monthly summary (text-based, by category)
+- [x] Basic Web UI: dashboard + transaction list
 
 ### v2 — Bank integration
 

@@ -4,6 +4,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.user import User
 
 
+async def get_all(db: AsyncSession) -> list[User]:
+    result = await db.execute(select(User).where(User.is_active == True))
+    return list(result.scalars().all())
+
+
 async def get_by_telegram_id(db: AsyncSession, telegram_id: str) -> User | None:
     return await db.scalar(select(User).where(User.telegram_id == telegram_id))
 

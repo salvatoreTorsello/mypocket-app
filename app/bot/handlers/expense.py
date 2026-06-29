@@ -1,3 +1,4 @@
+import base64
 from datetime import date
 
 from telegram import Update
@@ -20,9 +21,10 @@ from app.integrations.anthropic import client as claude
 from app.models.contribution import AccountContribution
 
 # ── Conversation states ────────────────────────────────────────────────────────
-EXPENSE_CONFIRM = 0       # waiting for destination (personal / household / edit / cancel)
-EXPENSE_VOUCHER_PICK = 1  # waiting for voucher account pick (or "no vouchers")
+EXPENSE_CONFIRM = 0         # waiting for destination (personal / household / edit / cancel)
+EXPENSE_VOUCHER_PICK = 1    # waiting for voucher account pick (or "no vouchers")
 EXPENSE_VOUCHER_AMOUNT = 2  # waiting for voucher amount text input
+# VOICE_CONFIRM = 3 lives in voice.py to avoid circular imports
 
 
 # ── Entry / re-entry ───────────────────────────────────────────────────────────
@@ -93,6 +95,88 @@ async def handle_expense_message(update: Update, context: ContextTypes.DEFAULT_T
     ]
     if parsed.clarification_needed:
         lines.append(f"❓ _{parsed.clarification_needed}_")
+
+    await wait_msg.edit_text(
+        "\n".join(lines),
+        parse_mode="Markdown",
+        reply_markup=keyboards.expense_confirm_keyboard(has_shared=bool(shared)),
+    )
+    return EXPENSE_CONFIRM
+
+
+# ── Receipt photo entry ────────────────────────────────────────────────────────
+
+async def handle_expense_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    async with AsyncSessionLocal() as db:
+        user = await get_registered(update, context, db)
+        if user is None:
+            await update.message.reply_text(
+                "Please set up your account with /start before logging expenses."
+            )
+            return ConversationHandler.END
+
+        personal = await crud_accounts.get_personal_accounts(db, user.id)
+        shared = await crud_accounts.get_shared_accounts(db, user.id)
+        voucher_accs = [a for a in personal if a.account_type in ("voucher", "welfare")]
+        spendable = [a for a in personal if a.account_type not in ("voucher", "welfare")]
+
+    if not spendable:
+        await update.message.reply_text(
+            "You don't have any bank or cash accounts set up yet.\n"
+            "Use /start to create one first."
+        )
+        return ConversationHandler.END
+
+    wait_msg = await update.message.reply_text("📷 Reading receipt…")
+    try:
+        photo = update.message.photo[-1]  # highest resolution Telegram sends
+        tg_file = await context.bot.get_file(photo.file_id)
+        data = await tg_file.download_as_bytearray()
+        image_b64 = base64.b64encode(data).decode()
+        receipt = await claude.extract_receipt(image_b64)
+    except Exception:
+        await wait_msg.edit_text(
+            "⚠️ Couldn't read that image. Try a clearer photo, or type the expense manually."
+        )
+        return ConversationHandler.END
+
+    if not receipt.is_readable:
+        await wait_msg.edit_text(
+            "⚠️ Receipt confidence too low — try a clearer photo, or type the expense manually."
+        )
+        return ConversationHandler.END
+
+    if receipt.total <= 0:
+        await wait_msg.edit_text(
+            "⚠️ Couldn't find a total on the receipt. Try typing it manually."
+        )
+        return ConversationHandler.END
+
+    context.user_data["expense"] = {
+        "parsed_amount": receipt.total,
+        "parsed_merchant": receipt.merchant,
+        "parsed_date": receipt.date,
+        "parsed_category": receipt.category_suggestion,
+        "parsed_confidence": receipt.category_confidence,
+        "raw_text": f"[photo] {receipt.merchant} {receipt.total:.2f}",
+        "has_shared": bool(shared),
+        "personal_account_id": spendable[0].id,
+        "shared_account_id": shared[0].id if shared else None,
+        "voucher_accounts": [
+            {"id": a.id, "name": a.name, "type": a.account_type, "face_value": a.face_value}
+            for a in voucher_accs
+        ],
+    }
+
+    merchant = receipt.merchant or "Receipt"
+    conf_tag = "✓" if receipt.category_confidence >= 0.70 else f"({receipt.category_confidence*100:.0f}%)"
+    lines = [
+        f"🏪 *{merchant}* €{receipt.total:.2f}",
+        f"📁 {receipt.category_suggestion} {conf_tag}",
+    ]
+    if receipt.items:
+        for item in receipt.items[:3]:
+            lines.append(f"  • {item['name']} €{item['amount']:.2f}")
 
     await wait_msg.edit_text(
         "\n".join(lines),
@@ -297,25 +381,45 @@ async def expense_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
 # ── ConversationHandler ────────────────────────────────────────────────────────
 
-expense_conv = ConversationHandler(
-    entry_points=[
-        MessageHandler(filters.TEXT & ~filters.COMMAND, handle_expense_message),
-    ],
-    states={
-        EXPENSE_CONFIRM: [
-            CallbackQueryHandler(expense_confirmed_personal, pattern="^expense:personal$"),
-            CallbackQueryHandler(expense_confirmed_shared,   pattern="^expense:shared$"),
-            CallbackQueryHandler(expense_edit,               pattern="^expense:edit$"),
-            CallbackQueryHandler(expense_cancel,             pattern="^expense:cancel$"),
+def _build_expense_conv() -> ConversationHandler:
+    from app.bot.handlers.voice import (
+        VOICE_CONFIRM,
+        handle_voice,
+        voice_cancel,
+        voice_confirmed,
+        voice_retry,
+    )
+
+    return ConversationHandler(
+        entry_points=[
             MessageHandler(filters.TEXT & ~filters.COMMAND, handle_expense_message),
+            MessageHandler(filters.PHOTO, handle_expense_photo),
+            MessageHandler(filters.VOICE, handle_voice),
         ],
-        EXPENSE_VOUCHER_PICK: [
-            CallbackQueryHandler(expense_voucher_none, pattern="^voucher:none$"),
-            CallbackQueryHandler(expense_voucher_pick, pattern=r"^voucher:\d+$"),
-        ],
-        EXPENSE_VOUCHER_AMOUNT: [
-            MessageHandler(filters.TEXT & ~filters.COMMAND, expense_voucher_amount),
-        ],
-    },
-    fallbacks=[CommandHandler("cancel", expense_cancel)],
-)
+        states={
+            EXPENSE_CONFIRM: [
+                CallbackQueryHandler(expense_confirmed_personal, pattern="^expense:personal$"),
+                CallbackQueryHandler(expense_confirmed_shared,   pattern="^expense:shared$"),
+                CallbackQueryHandler(expense_edit,               pattern="^expense:edit$"),
+                CallbackQueryHandler(expense_cancel,             pattern="^expense:cancel$"),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, handle_expense_message),
+                MessageHandler(filters.PHOTO, handle_expense_photo),
+            ],
+            EXPENSE_VOUCHER_PICK: [
+                CallbackQueryHandler(expense_voucher_none, pattern="^voucher:none$"),
+                CallbackQueryHandler(expense_voucher_pick, pattern=r"^voucher:\d+$"),
+            ],
+            EXPENSE_VOUCHER_AMOUNT: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, expense_voucher_amount),
+            ],
+            VOICE_CONFIRM: [
+                CallbackQueryHandler(voice_confirmed, pattern="^voice:ok$"),
+                CallbackQueryHandler(voice_retry,     pattern="^voice:retry$"),
+                CallbackQueryHandler(voice_cancel,    pattern="^voice:cancel$"),
+            ],
+        },
+        fallbacks=[CommandHandler("cancel", expense_cancel)],
+    )
+
+
+expense_conv = _build_expense_conv()
